@@ -3,11 +3,13 @@
 let fs = require('fs');
 let path = require('path');
 let child_process = require('child_process');
+let sh = require('shelljs');
 
 let projects = path.join(process.env.ODASA_HOME, 'projects'),
+    queries = path.join(process.env.ODASA_HOME, 'queries'),
     home = require('os').homedir(),
     trapCache = path.join(home, 'trap-cache'),
-    suite = path.join(home, 'code/ql/javascript/config/suites/lgtm/javascript-flow-summaries');
+    suite = path.join(queries, 'suites/javascript/flow-summaries');
 
 if (!fs.statSync(projects).isDirectory()) {
     console.error("No project directory found at " + projects);
@@ -21,7 +23,8 @@ if (!fs.statSync(suite).isFile()) {
 
 let rootDir = process.cwd(),
     additionalSources = path.join(rootDir, 'additional-sources.csv'),
-    additionalSinks = path.join(rootDir, 'additional-sinks.csv');
+    additionalSinks = path.join(rootDir, 'additional-sinks.csv'),
+    additionalSteps = path.join(rootDir, 'additional-steps.csv');
 
 function proc(pkg, isRoot, org) {
     console.log("Processing " + pkg);
@@ -62,7 +65,7 @@ function proc(pkg, isRoot, org) {
     <build>java -jar \${odasa_tools}/extractor-javascript.jar --externs --trap-cache ${trapCache} \${odasa_tools}/data/externs</build>
     <build>java -Xmx4G -Xss16M -jar \${odasa_tools}/extractor-javascript.jar --trap-cache ${trapCache} --exclude **/node_modules --experimental .</build>
     <build>odasa duplicateCode --ram 2048 --minimum-tokens 100</build>
-    <build>bash -c "cp ${additionalSources} ${additionalSinks} \${snapshot}/external/data"</build>
+    <build>bash -c "cp ${additionalSources} ${additionalSinks} ${additionalSteps} \${snapshot}/external/data"</build>
   </autoupdate>
 </project>`);
 		buildAndAnalyse(pkgName, projectDir);
@@ -90,7 +93,18 @@ function buildAndAnalyse(pkgName, projectDir) {
 	return;
     }
 
-    runOdasa(projectDir, "unpackFlowSummaries", "--latest", "--suite", suite, "--output-folder", rootDir);
+    for (let [query, csv] of [ [ "ExtractSourceSummaries.ql", "additional-sources.csv" ]
+			       [ "ExtractSinkSummaries.ql", "additional-sinks.csv" ],
+			       [ "ExtractFlowStepSummaries.ql", "additional-steps.csv" ] ]) {
+	let output = path.join(projectDir, csv);
+	res = runOdasa(projectDir, "interpretResults", "--queries", path.join(queries, "semmlecode-javascript-queries/Security/Summaries/" + query),
+		       "--output", output, "--format", "csv", "--latest");
+	if (!res) {
+	    console.error("Unable to interpret results for query " + query);
+	    return;
+	}
+	sh.cat(output).toEnd(path.join(rootDir, csv));
+    }
 }
 
 function runOdasa(projectDir, cmd, ...args) {
@@ -101,4 +115,5 @@ function runOdasa(projectDir, cmd, ...args) {
 
 fs.writeFileSync(additionalSources, '');
 fs.writeFileSync(additionalSinks, '');
+fs.writeFileSync(additionalSteps, '');
 proc(rootDir, true);
